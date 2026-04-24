@@ -10,14 +10,12 @@ import requests
 from flask import Flask, jsonify
 
 # 1. CREDENCIALES
-# El .strip() es vital para evitar el error "Token must not contain spaces"
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 GROQ_KEY = os.environ.get("GROQ_KEY", "").strip()
-# Railway asigna el puerto dinámicamente; lo capturamos aquí
 PORT = int(os.environ.get("PORT", 8080))
 
 if not TELEGRAM_TOKEN or not GROQ_KEY:
-    print("⚠️ ADVERTENCIA: Faltan secretos. El bot esperará configuración.", flush=True)
+    print("⚠️ ADVERTENCIA: Faltan secretos en las variables de Railway.", flush=True)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN if TELEGRAM_TOKEN else "DUMMY", threaded=False)
 BOT_USERNAME = ""
@@ -27,9 +25,11 @@ def init_bot_username():
     if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "DUMMY":
         return
     try:
-        BOT_USERNAME = (bot.get_me().username or "").lower()
+        me = bot.get_me()
+        BOT_USERNAME = (me.username or "").lower()
+        print(f"🤖 Bot conectado como: @{BOT_USERNAME}", flush=True)
     except Exception as e:
-        print(f"get_me error: {e}", flush=True)
+        print(f"❌ Error al obtener info del bot: {e}", flush=True)
 
 # 2. PERSONALIDAD
 SYSTEM_PROMPT = (
@@ -159,7 +159,8 @@ def imagen(message):
     except:
         bot.reply_to(message, MENSAJE_DEMORA)
     finally:
-        bot.delete_message(message.chat.id, aviso.message_id)
+        try: bot.delete_message(message.chat.id, aviso.message_id)
+        except: pass
 
 @bot.message_handler(func=lambda m: True)
 def chat(message):
@@ -179,24 +180,25 @@ def home(): return "MymyIA Online 🚀"
 @app.route("/healthz")
 def healthz(): return jsonify(status="ok"), 200
 
-def run_flask():
-    # Es fundamental usar la variable PORT de Railway
-    app.run(host="0.0.0.0", port=PORT)
-
 def run_bot_loop():
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "DUMMY": return
+    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "DUMMY":
+        print("❌ Token no configurado, bot en pausa.", flush=True)
+        return
+    init_bot_username()
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
         except Exception as e:
-            print(f"Bot error: {e}", flush=True)
+            print(f"⚠️ Bot error: {e}. Reintentando...", flush=True)
             time.sleep(5)
 
 if __name__ == "__main__":
     init_db()
-    # Iniciar bot en hilo separado
+    # 1. Iniciar el bot en segundo plano
     threading.Thread(target=run_bot_loop, daemon=True).start()
-    print(f"🚀 Servidor en puerto {PORT}", flush=True)
-    # Flask debe correr en el hilo principal
-    run_flask()
     
+    # 2. Iniciar Flask en el hilo principal
+    print(f"🚀 MymyIA ONLINE en puerto {PORT}", flush=True)
+    # Importante: host 0.0.0.0 para Railway
+    app.run(host="0.0.0.0", port=PORT, threaded=True)
+        
