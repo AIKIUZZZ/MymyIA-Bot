@@ -10,9 +10,10 @@ import requests
 from flask import Flask, jsonify
 
 # 1. CREDENCIALES
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROQ_KEY = os.environ.get("GROQ_KEY")
-PORT = int(os.environ.get("PORT", "8080"))
+# .strip() elimina automáticamente cualquier espacio accidental
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
+GROQ_KEY = os.environ.get("GROQ_KEY", "").strip()
+
 
 # Se eliminó el sys.exit(1) para evitar fallos de construcción en Railway
 if not TELEGRAM_TOKEN or not GROQ_KEY:
