@@ -14,9 +14,9 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_KEY = os.environ.get("GROQ_KEY")
 PORT = int(os.environ.get("PORT", "8080"))
 
-if not TELEGRAM_TOKEN or not GROQ_KEY:
-    print("ERROR: Faltan secretos (TELEGRAM_TOKEN o GROQ_KEY)", file=sys.stderr)
-    sys.exit(1)
+#if not TELEGRAM_TOKEN or not GROQ_KEY:
+    #print("ERROR: Faltan secretos (TELEGRAM_TOKEN o GROQ_KEY)", file=sys.stderr)
+    #sys.exit(1)
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 BOT_USERNAME = ""
