@@ -14,16 +14,17 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_KEY = os.environ.get("GROQ_KEY")
 PORT = int(os.environ.get("PORT", "8080"))
 
-#if not TELEGRAM_TOKEN or not GROQ_KEY:
-    #print("ERROR: Faltan secretos (TELEGRAM_TOKEN o GROQ_KEY)", file=sys.stderr)
-    #sys.exit(1)
+# Se eliminó el sys.exit(1) para evitar fallos de construcción en Railway
+if not TELEGRAM_TOKEN or not GROQ_KEY:
+    print("⚠️ ADVERTENCIA: Faltan secretos (TELEGRAM_TOKEN o GROQ_KEY). El bot no funcionará correctamente hasta configurarlos.")
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
+bot = telebot.TeleBot(TELEGRAM_TOKEN if TELEGRAM_TOKEN else "DUMMY", threaded=False)
 BOT_USERNAME = ""
-
 
 def init_bot_username():
     global BOT_USERNAME
+    if not TELEGRAM_TOKEN:
+        return
     try:
         BOT_USERNAME = (bot.get_me().username or "").lower()
     except Exception as e:
@@ -33,7 +34,6 @@ def init_bot_username():
 SYSTEM_PROMPT = (
     "Eres MymyIA, una asistente genial creada por AIKIU. "
     "Eres divertida, usas emojis y recuerdas todo sobre el usuario. "
-    
 )
 MAX_MENSAJES = 20
 MENSAJE_DEMORA = "⚠️ Estoy experimentando una pequeña demora, por favor intenta de nuevo en un momento"
@@ -41,7 +41,6 @@ MENSAJE_DEMORA = "⚠️ Estoy experimentando una pequeña demora, por favor int
 # 3. BASE DE DATOS (WAL + thread-local)
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mymyia.db")
 _db_local = threading.local()
-
 
 def get_db():
     conn = getattr(_db_local, "conn", None)
@@ -52,7 +51,6 @@ def get_db():
         conn.execute("PRAGMA temp_store=MEMORY")
         _db_local.conn = conn
     return conn
-
 
 def init_db():
     conn = get_db()
@@ -68,7 +66,6 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON mensajes(user_id, id DESC)")
     conn.commit()
 
-
 def guardar(user_id, role, content):
     try:
         conn = get_db()
@@ -79,7 +76,6 @@ def guardar(user_id, role, content):
         conn.commit()
     except Exception as e:
         print(f"DB guardar error: {e}", flush=True)
-
 
 def cargar(user_id):
     try:
@@ -93,7 +89,6 @@ def cargar(user_id):
         print(f"DB cargar error: {e}", flush=True)
         return []
 
-
 def borrar(user_id):
     try:
         conn = get_db()
@@ -102,9 +97,10 @@ def borrar(user_id):
     except Exception as e:
         print(f"DB borrar error: {e}", flush=True)
 
-
 # 4. INTELIGENCIA
 def mejorar_prompt(prompt):
+    if not GROQ_KEY:
+        return prompt
     instr = (
         "You are an expert prompt engineer for AI image generation. "
         "Rewrite the user's idea as ONE detailed English paragraph (60-90 words) "
@@ -126,8 +122,9 @@ def mejorar_prompt(prompt):
         print(f"mejorar_prompt error: {e}", flush=True)
     return prompt
 
-
 def hablar_con_ia(user_id, texto):
+    if not GROQ_KEY:
+        return "❌ Error: GROQ_KEY no configurada."
     guardar(user_id, "user", texto)
     mensajes = [{"role": "system", "content": SYSTEM_PROMPT}] + cargar(user_id)
     payload = {"model": "llama-3.3-70b-versatile", "messages": mensajes}
@@ -155,7 +152,6 @@ def hablar_con_ia(user_id, texto):
             break
     return MENSAJE_DEMORA
 
-
 # 5. COMANDOS
 @bot.message_handler(commands=["start", "help"])
 def ayuda(message):
@@ -164,16 +160,14 @@ def ayuda(message):
         "/img [descripcion] - genero una imagen a partir de tu texto\n"
         "/reset - borro nuestro historial y empezamos de cero\n"
         "/help - muestro la lista de comandos\n\n"
-        "Tambien puedes escribirme cualquier cosa y te respondere recordando los ultimos mensajes."
+        "También puedes escribirme cualquier cosa y te responderé recordando los últimos mensajes."
     )
     bot.reply_to(message, texto)
-
 
 @bot.message_handler(commands=["reset"])
 def reset(message):
     borrar(message.from_user.id)
     bot.reply_to(message, "✨ Memoria limpia. ¡Hola de nuevo!")
-
 
 @bot.message_handler(commands=["img"])
 def imagen(message):
@@ -200,22 +194,15 @@ def imagen(message):
         except Exception:
             pass
 
-
 def es_para_mi(message):
     texto = message.text or ""
     if message.chat.type == "private":
         return True, texto
     if BOT_USERNAME and f"@{BOT_USERNAME}" in texto.lower():
-        # En grupos: solo responde si lo mencionan explicitamente con @MymyIA_Bot
-        limpio_lower = texto.lower().replace(f"@{BOT_USERNAME}", "").strip()
-        if not limpio_lower:
-            return False, ""
-        # Recorta la mencion preservando mayusculas/minusculas originales
         idx = texto.lower().find(f"@{BOT_USERNAME}")
         limpio = (texto[:idx] + texto[idx + len(BOT_USERNAME) + 1:]).strip()
         return True, limpio or texto
     return False, texto
-
 
 @bot.message_handler(func=lambda m: True)
 def chat(message):
@@ -232,30 +219,23 @@ def chat(message):
         except Exception:
             pass
 
-
-# 6. SERVIDOR WEB (KEEP-ALIVE + HEALTH CHECK PARA DEPLOY)
+# 6. SERVIDOR WEB
 app = Flask(__name__)
-
 
 @app.route("/")
 def home():
     return "MymyIA Online 🚀"
 
-
-@app.route("/api/healthz")
 @app.route("/healthz")
 def healthz():
     return jsonify(status="ok", service="mymyia"), 200
-
 
 @app.route("/ping")
 def ping():
     return "pong"
 
-
 def run_flask():
     app.run(host="0.0.0.0", port=PORT, threaded=True, use_reloader=False)
-
 
 def auto_keep_alive():
     while True:
@@ -265,8 +245,10 @@ def auto_keep_alive():
         except Exception:
             pass
 
-
 def run_bot_loop():
+    if not TELEGRAM_TOKEN:
+        print("Bot loop no iniciado: falta TELEGRAM_TOKEN")
+        return
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)
@@ -274,13 +256,9 @@ def run_bot_loop():
             print(f"⚠️ Polling error: {e}. Reintentando...", flush=True)
             time.sleep(3)
 
-
-# 7. ARRANQUE — Flask en hilo principal (para que el deploy detecte el puerto rápido),
-# bot de Telegram en hilo de fondo.
 def start_bot_async():
     init_bot_username()
     run_bot_loop()
-
 
 if __name__ == "__main__":
     init_db()
@@ -288,3 +266,4 @@ if __name__ == "__main__":
     threading.Thread(target=auto_keep_alive, daemon=True).start()
     print(f"🚀 MymyIA ONLINE (web :{PORT})", flush=True)
     run_flask()
+        
