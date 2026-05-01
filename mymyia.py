@@ -9,6 +9,21 @@ import telebot
 import requests
 from flask import Flask, jsonify
 
+# ==========================================
+# 0. DEBUG: DETECTAR QUÉ ENVÍA RAILWAY
+# ==========================================
+print("--- INICIANDO DEBUG DE VARIABLES ---", flush=True)
+variables_encontradas = False
+for key in os.environ:
+    if "TOKEN" in key or "KEY" in key:
+        print(f"👉 Variable recibida en el contenedor: {key} = {'*' * 8}", flush=True)
+        variables_encontradas = True
+
+if not variables_encontradas:
+    print("⚠️ ADVERTENCIA: Railway NO está enviando ninguna variable con 'TOKEN' o 'KEY'.", flush=True)
+print("--- FIN DEL DEBUG ---", flush=True)
+# ==========================================
+
 # 1. CREDENCIALES
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 GROQ_KEY = os.environ.get("GROQ_KEY", "").strip()
@@ -16,7 +31,7 @@ PORT = int(os.environ.get("PORT", 8080))
 
 # Validación crítica: si no hay token, el bot debe morir para que veas el error en logs
 if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
-    print(f"❌ ERROR CRÍTICO: TELEGRAM_TOKEN no configurado o inválido (Valor actual: {TELEGRAM_TOKEN[:3]}...). Debe tener un ':'", flush=True)
+    print(f"❌ ERROR CRÍTICO: TELEGRAM_TOKEN no configurado o inválido (Valor actual: '{TELEGRAM_TOKEN[:3]}...'). Debe tener un ':'", flush=True)
     sys.exit(1)
 
 print(f"✅ Token detectado correctamente. Iniciando bot...", flush=True)
@@ -196,4 +211,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_bot_loop, daemon=True).start()
     print(f"🚀 MymyIA ONLINE en puerto {PORT}", flush=True)
     app.run(host="0.0.0.0", port=PORT, threaded=True)
-    
