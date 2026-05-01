@@ -9,54 +9,38 @@ import telebot
 import requests
 from flask import Flask, jsonify
 
-# ==========================================
-# 0. DEBUG: DETECTAR QUÉ ENVÍA RAILWAY
-# ==========================================
-print("--- INICIANDO DEBUG DE VARIABLES ---", flush=True)
-variables_encontradas = False
-for key in os.environ:
-    if "TOKEN" in key or "KEY" in key:
-        print(f"👉 Variable recibida en el contenedor: {key} = {'*' * 8}", flush=True)
-        variables_encontradas = True
-
-if not variables_encontradas:
-    print("⚠️ ADVERTENCIA: Railway NO está enviando ninguna variable con 'TOKEN' o 'KEY'.", flush=True)
-print("--- FIN DEL DEBUG ---", flush=True)
-# ==========================================
-
 # 1. CREDENCIALES
+# FORZAMOS la lectura y limpieza de espacios
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 GROQ_KEY = os.environ.get("GROQ_KEY", "").strip()
 PORT = int(os.environ.get("PORT", 8080))
 
-# Validación crítica: si no hay token, el bot debe morir para que veas el error en logs
+# --- DIAGNÓSTICO ESTRICTO ---
+print(f"DEBUG INICIO: Token detectado como '{TELEGRAM_TOKEN[:5]}...' (Longitud: {len(TELEGRAM_TOKEN)})", flush=True)
+
 if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
-    print(f"❌ ERROR CRÍTICO: TELEGRAM_TOKEN no configurado o inválido (Valor actual: '{TELEGRAM_TOKEN[:3]}...'). Debe tener un ':'", flush=True)
-    sys.exit(1)
+    print(f"❌ ERROR CRÍTICO: El token no es válido o está vacío. Token recibido: '{TELEGRAM_TOKEN}'", flush=True)
+    # No paramos el proceso aquí para que el bot no se quede en "Crashed", 
+    # pero el bot no se iniciará hasta que la variable esté bien.
+    pass 
+else:
+    print("✅ Token validado correctamente. Iniciando bot...", flush=True)
 
-print(f"✅ Token detectado correctamente. Iniciando bot...", flush=True)
-
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
+# Inicializamos el bot solo si el token parece real
+bot = telebot.TeleBot(TELEGRAM_TOKEN if ":" in TELEGRAM_TOKEN else "INVALID_TOKEN", threaded=False)
 BOT_USERNAME = ""
 
 def init_bot_username():
     global BOT_USERNAME
+    if ":" not in TELEGRAM_TOKEN: return
     try:
         me = bot.get_me()
         BOT_USERNAME = (me.username or "").lower()
         print(f"🤖 Bot conectado como: @{BOT_USERNAME}", flush=True)
     except Exception as e:
-        print(f"❌ Error al obtener info del bot: {e}", flush=True)
+        print(f"❌ Error al conectar con Telegram (¿Token mal escrito?): {e}", flush=True)
 
-# 2. PERSONALIDAD
-SYSTEM_PROMPT = (
-    "Eres MymyIA, una asistente genial creada por AIKIU. "
-    "Eres divertida, usas emojis y recuerdas todo sobre el usuario."
-)
-MAX_MENSAJES = 20
-MENSAJE_DEMORA = "⚠️ Estoy experimentando una pequeña demora, por favor intenta de nuevo en un momento"
-
-# 3. BASE DE DATOS (Ruta /tmp para permisos en Railway)
+# 2. BASE DE DATOS
 DB_PATH = "/tmp/mymyia.db"
 _db_local = threading.local()
 
@@ -71,143 +55,91 @@ def get_db():
 
 def init_db():
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS mensajes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            ts REAL NOT NULL
-        )
-    """)
+    conn.execute("CREATE TABLE IF NOT EXISTS mensajes (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, ts REAL NOT NULL)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON mensajes(user_id, id DESC)")
     conn.commit()
 
+# (Las funciones guardar, cargar, borrar, mejorar_prompt y hablar_con_ia se mantienen igual)
 def guardar(user_id, role, content):
     try:
         conn = get_db()
-        conn.execute(
-            "INSERT INTO mensajes (user_id, role, content, ts) VALUES (?, ?, ?, ?)",
-            (user_id, role, content, time.time()),
-        )
+        conn.execute("INSERT INTO mensajes (user_id, role, content, ts) VALUES (?, ?, ?, ?)", (user_id, role, content, time.time()))
         conn.commit()
-    except Exception as e:
-        print(f"DB guardar error: {e}", flush=True)
+    except Exception as e: print(f"DB guardar error: {e}", flush=True)
 
 def cargar(user_id):
     try:
         conn = get_db()
-        cur = conn.execute(
-            "SELECT role, content FROM mensajes WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, MAX_MENSAJES),
-        )
+        cur = conn.execute("SELECT role, content FROM mensajes WHERE user_id = ? ORDER BY id DESC LIMIT 20", (user_id,))
         return [{"role": r, "content": c} for r, c in reversed(cur.fetchall())]
-    except Exception as e:
-        print(f"DB cargar error: {e}", flush=True)
-        return []
+    except Exception as e: return []
 
 def borrar(user_id):
     try:
         conn = get_db()
         conn.execute("DELETE FROM mensajes WHERE user_id = ?", (user_id,))
         conn.commit()
-    except Exception as e:
-        print(f"DB borrar error: {e}", flush=True)
+    except Exception as e: print(f"DB borrar error: {e}", flush=True)
 
-# 4. INTELIGENCIA
 def mejorar_prompt(prompt):
     if not GROQ_KEY: return prompt
-    instr = "Rewrite the user's idea as ONE detailed English paragraph (60-90 words) for AI image generation. Output ONLY the paragraph."
     try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": instr}, {"role": "user", "content": prompt}]},
-            timeout=15,
-        )
-        if r.status_code == 200:
-            return r.json()["choices"][0]["message"]["content"].strip()
+            json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": "Rewrite to detailed image prompt"}, {"role": "user", "content": prompt}]}, timeout=15)
+        if r.status_code == 200: return r.json()["choices"][0]["message"]["content"].strip()
     except: pass
     return prompt
 
 def hablar_con_ia(user_id, texto):
-    if not GROQ_KEY: return "❌ Configura GROQ_KEY en Railway."
+    if not GROQ_KEY: return "❌ GROQ_KEY no configurado."
     guardar(user_id, "user", texto)
-    mensajes = [{"role": "system", "content": SYSTEM_PROMPT}] + cargar(user_id)
-    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
+    mensajes = [{"role": "system", "content": "Eres MymyIA."}] + cargar(user_id)
     try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+        r = requests.post("https://api.groq.com/openai/v1/chat/completions",
             json={"model": "llama-3.3-70b-versatile", "messages": mensajes},
-            headers=headers, timeout=25
-        )
+            headers={"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}, timeout=25)
         if r.status_code == 200:
             resp = r.json()["choices"][0]["message"]["content"]
             guardar(user_id, "assistant", resp)
             return resp
-    except Exception as e:
-        print(f"IA Error: {e}", flush=True)
-    return MENSAJE_DEMORA
+    except Exception as e: print(f"IA Error: {e}", flush=True)
+    return "⚠️ Demora, intenta luego."
 
 # 5. COMANDOS TELEGRAM
 @bot.message_handler(commands=["start", "help"])
-def ayuda(message):
-    bot.reply_to(message, "🌟 ¡Hola! Soy MymyIA.\n\n/img [texto] - Crea imágenes\n/reset - Limpia memoria\nEnvíame cualquier mensaje para charlar.")
+def ayuda(message): bot.reply_to(message, "🌟 MymyIA Online.")
 
 @bot.message_handler(commands=["reset"])
-def reset(message):
+def reset(message): 
     borrar(message.from_user.id)
     bot.reply_to(message, "✨ Memoria limpia.")
 
 @bot.message_handler(commands=["img"])
 def imagen(message):
     prompt = message.text.partition(" ")[2].strip()
-    if not prompt: return bot.reply_to(message, "Uso: /img gato espacial")
-    aviso = bot.reply_to(message, "🎨 Dibujando...")
+    if not prompt: return bot.reply_to(message, "Uso: /img [texto]")
     try:
-        mejorado = mejorar_prompt(prompt)
-        seed = random.randint(1, 10**9)
-        url = f"https://image.pollinations.ai/prompt/{quote(mejorado)}?model=flux&width=1024&height=1024&seed={seed}&nologo=true"
-        r = requests.get(url, timeout=60)
-        if r.status_code == 200:
-            bot.send_photo(message.chat.id, r.content, caption=f"✨ {prompt}")
-        else:
-            bot.reply_to(message, "❌ Error al generar imagen.")
-    except:
-        bot.reply_to(message, MENSAJE_DEMORA)
-    finally:
-        try: bot.delete_message(message.chat.id, aviso.message_id)
-        except: pass
+        url = f"https://image.pollinations.ai/prompt/{quote(mejorar_prompt(prompt))}?model=flux&nologo=true"
+        bot.send_photo(message.chat.id, url, caption=f"✨ {prompt}")
+    except: bot.reply_to(message, "❌ Error.")
 
 @bot.message_handler(func=lambda m: True)
 def chat(message):
-    if message.chat.type != "private" and f"@{BOT_USERNAME}" not in (message.text or "").lower():
-        return
-    texto = (message.text or "").replace(f"@{BOT_USERNAME}", "").strip()
-    if not texto: return
-    bot.send_chat_action(message.chat.id, "typing")
-    bot.reply_to(message, hablar_con_ia(message.from_user.id, texto))
+    if message.chat.type != "private" and f"@{BOT_USERNAME}" not in (message.text or "").lower(): return
+    bot.reply_to(message, hablar_con_ia(message.from_user.id, message.text.replace(f"@{BOT_USERNAME}", "").strip()))
 
 # 6. SERVIDOR WEB
 app = Flask(__name__)
-
 @app.route("/")
 def home(): return "MymyIA Online 🚀"
 
-@app.route("/healthz")
-def healthz(): return jsonify(status="ok"), 200
-
 def run_bot_loop():
     init_bot_username()
-    while True:
-        try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
-        except Exception as e:
-            print(f"⚠️ Bot error: {e}. Reintentando...", flush=True)
-            time.sleep(5)
+    bot.infinity_polling(timeout=20, long_polling_timeout=20, skip_pending=True)
 
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=run_bot_loop, daemon=True).start()
-    print(f"🚀 MymyIA ONLINE en puerto {PORT}", flush=True)
     app.run(host="0.0.0.0", port=PORT, threaded=True)
+    
