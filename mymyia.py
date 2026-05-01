@@ -14,16 +14,18 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "").strip()
 GROQ_KEY = os.environ.get("GROQ_KEY", "").strip()
 PORT = int(os.environ.get("PORT", 8080))
 
-if not TELEGRAM_TOKEN or not GROQ_KEY:
-    print("⚠️ ADVERTENCIA: Faltan secretos en las variables de Railway.", flush=True)
+# Validación crítica: si no hay token, el bot debe morir para que veas el error en logs
+if not TELEGRAM_TOKEN or ":" not in TELEGRAM_TOKEN:
+    print(f"❌ ERROR CRÍTICO: TELEGRAM_TOKEN no configurado o inválido (Valor actual: {TELEGRAM_TOKEN[:3]}...). Debe tener un ':'", flush=True)
+    sys.exit(1)
 
-bot = telebot.TeleBot(TELEGRAM_TOKEN if TELEGRAM_TOKEN else "DUMMY", threaded=False)
+print(f"✅ Token detectado correctamente. Iniciando bot...", flush=True)
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 BOT_USERNAME = ""
 
 def init_bot_username():
     global BOT_USERNAME
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "DUMMY":
-        return
     try:
         me = bot.get_me()
         BOT_USERNAME = (me.username or "").lower()
@@ -39,8 +41,8 @@ SYSTEM_PROMPT = (
 MAX_MENSAJES = 20
 MENSAJE_DEMORA = "⚠️ Estoy experimentando una pequeña demora, por favor intenta de nuevo en un momento"
 
-# 3. BASE DE DATOS
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mymyia.db")
+# 3. BASE DE DATOS (Ruta /tmp para permisos en Railway)
+DB_PATH = "/tmp/mymyia.db"
 _db_local = threading.local()
 
 def get_db():
@@ -171,7 +173,7 @@ def chat(message):
     bot.send_chat_action(message.chat.id, "typing")
     bot.reply_to(message, hablar_con_ia(message.from_user.id, texto))
 
-# 6. SERVIDOR WEB Y MANTENIMIENTO
+# 6. SERVIDOR WEB
 app = Flask(__name__)
 
 @app.route("/")
@@ -181,9 +183,6 @@ def home(): return "MymyIA Online 🚀"
 def healthz(): return jsonify(status="ok"), 200
 
 def run_bot_loop():
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "DUMMY":
-        print("❌ Token no configurado, bot en pausa.", flush=True)
-        return
     init_bot_username()
     while True:
         try:
@@ -194,11 +193,7 @@ def run_bot_loop():
 
 if __name__ == "__main__":
     init_db()
-    # 1. Iniciar el bot en segundo plano
     threading.Thread(target=run_bot_loop, daemon=True).start()
-    
-    # 2. Iniciar Flask en el hilo principal
     print(f"🚀 MymyIA ONLINE en puerto {PORT}", flush=True)
-    # Importante: host 0.0.0.0 para Railway
     app.run(host="0.0.0.0", port=PORT, threaded=True)
-        
+    
